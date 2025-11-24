@@ -1,0 +1,2 @@
+frame-msg
+Pillow  # if using image processing
