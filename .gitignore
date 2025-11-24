@@ -1,4 +1,19 @@
-venv/
+# Python
 __pycache__/
-.DS_Store
 *.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.env/
+
+# macOS trash
+.DS_Store
+
+# VSCode
+.vscode/
+
+# Binaries or random files
+*.bin
+*.log
