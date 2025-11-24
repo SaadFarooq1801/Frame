@@ -26,7 +26,7 @@ async def main():
         await frame.send_message(0x20, sprite.pack())
 
         # Display the logo for 5 seconds
-        await asyncio.sleep(5.0)
+        await asyncio.sleep(10.0)
 
         # Cleanup
         frame.detach_print_response_handler()
