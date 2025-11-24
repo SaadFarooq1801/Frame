@@ -21,7 +21,7 @@ async def main():
         await frame.start_frame_app()
 
         # Load your logo image, quantize, and send
-        image_path = Path("images/alfaisal_logo.jpg")  # <-- your logo here
+        image_path = Path("images/Alfaisal.png")  # <-- your logo here
         sprite = TxSprite.from_image_bytes(image_path.read_bytes())
         await frame.send_message(0x20, sprite.pack())
 
