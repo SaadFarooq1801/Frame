@@ -1,47 +1,67 @@
 import asyncio
 import speech_recognition as sr
 from googletrans import Translator
-from frame_msg import FrameMsg
+from frame_sdk import Frame
+
+# Helper: wrap raw audio bytes into a WAV buffer compatible with SpeechRecognition
+def assemble_wav(raw_audio):
+    import io
+    import wave
+
+    # Frame mic audio is 16-bit PCM, 16kHz, mono
+    wav_buffer = io.BytesIO()
+
+    with wave.open(wav_buffer, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)       # 16-bit audio
+        wf.setframerate(16000)
+        wf.writeframes(raw_audio)
+
+    wav_buffer.seek(0)
+    return wav_buffer
 
 async def main():
-    frame = FrameMsg()
-    await frame.connect()
-
-    # Upload standard Lua libraries and your translator app
-    await frame.upload_stdlua_libs(lib_names=['data'])
-    await frame.upload_frame_app(local_filename="lua/translator_frame_app.lua")
-    await frame.start_frame_app()
-    frame.attach_print_response_handler()
-
-    recognizer = sr.Recognizer()
+    r = sr.Recognizer()
     translator = Translator()
 
-    await frame.print_short_text("Translator ready!")
+    async with Frame() as f:
+        await f.display_text("Translator Ready", x=1, y=1)
 
-    try:
-        while True:
-            with sr.Microphone() as source:
-                print("Listening...")
-                audio = recognizer.listen(source)
+        print("Listening through Frame mic... (Ctrl+C to stop)")
 
-            try:
-                # Convert speech to text
-                text = recognizer.recognize_google(audio)
-                print(f"Original: {text}")
+        buffer = bytearray()
 
-                # Translate to English
-                translated = translator.translate(text, dest='en')
-                print(f"Translated: {translated.text}")
+        async for chunk in f.microphone_stream():
+            if chunk is None:
+                continue
 
-                # Send translated text to Frame
-                await frame.send_message(0x30, translated.text)
+            # Add chunk to buffer
+            buffer.extend(chunk)
 
-            except Exception as e:
-                print(f"Error: {e}")
-                await frame.send_message(0x30, "Error processing audio")
+            # When buffer is large enough (~0.6s of audio) → process
+            if len(buffer) > 16000 * 1:   # 1 second of audio
+                wav_data = assemble_wav(bytes(buffer))
 
-    finally:
-        await frame.disconnect()
+                try:
+                    audio = sr.AudioFile(wav_data)
+                    with audio as source:
+                        audio_data = r.record(source)
+
+                    # STT: convert speech to text
+                    text = r.recognize_google(audio_data)
+                    print("Heard:", text)
+
+                    # Translate to English
+                    translated = translator.translate(text, dest="en").text
+                    print("Translated:", translated)
+
+                    # Display on Frame
+                    await f.display_text(translated, x=1, y=1)
+
+                except Exception as e:
+                    print("Error:", e)
+
+                buffer = bytearray()    # reset buffer
 
 if __name__ == "__main__":
     asyncio.run(main())
