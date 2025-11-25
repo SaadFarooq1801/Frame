@@ -1,67 +1,87 @@
 import asyncio
-import speech_recognition as sr
-from googletrans import Translator
-from frame_sdk import Frame
+from frame_msg import FrameMsg, RxAudio, TxCode
+from openai import OpenAI
 
-# Helper: wrap raw audio bytes into a WAV buffer compatible with SpeechRecognition
-def assemble_wav(raw_audio):
-    import io
-    import wave
-
-    # Frame mic audio is 16-bit PCM, 16kHz, mono
-    wav_buffer = io.BytesIO()
-
-    with wave.open(wav_buffer, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)       # 16-bit audio
-        wf.setframerate(16000)
-        wf.writeframes(raw_audio)
-
-    wav_buffer.seek(0)
-    return wav_buffer
+client = OpenAI()
 
 async def main():
-    r = sr.Recognizer()
-    translator = Translator()
+    frame = FrameMsg()
 
-    async with Frame() as f:
-        await f.display_text("Translator Ready", x=1, y=1)
+    try:
+        await frame.connect()
+        print("Connected to Frame.")
+
+        # Display ready message
+        await frame.print_short_text("Translator Ready")
+
+        # Upload essential Lua libs
+        await frame.upload_stdlua_libs(["data", "audio", "code"])
+
+        # Upload our custom firmware app
+        await frame.upload_frame_app("lua/translator_frame_app.lua")
+
+        # Start app
+        frame.attach_print_response_handler()
+        await frame.start_frame_app()
+
+        # Set up microphone receiver
+        rx = RxAudio(streaming=True)
+        audio_queue = await rx.attach(frame)
+
+        # Start microphone
+        print("Starting mic...")
+        await frame.send_message(0x30, TxCode(value=1).pack())
 
         print("Listening through Frame mic... (Ctrl+C to stop)")
 
-        buffer = bytearray()
+        while True:
+            try:
+                samples = audio_queue.get_nowait()
 
-        async for chunk in f.microphone_stream():
-            if chunk is None:
+            except asyncio.QueueEmpty:
+                await asyncio.sleep(0.001)
                 continue
 
-            # Add chunk to buffer
-            buffer.extend(chunk)
+            if samples is None:
+                continue
 
-            # When buffer is large enough (~0.6s of audio) → process
-            if len(buffer) > 16000 * 1:   # 1 second of audio
-                wav_data = assemble_wav(bytes(buffer))
+            # Convert raw audio to WAV bytes
+            wav_bytes = RxAudio.to_wav_bytes(samples)
 
-                try:
-                    audio = sr.AudioFile(wav_data)
-                    with audio as source:
-                        audio_data = r.record(source)
+            # Send to Whisper
+            whisper = client.audio.transcriptions.create(
+                model="gpt-4o-mini-tts",
+                file=wav_bytes,
+                response_format="verbose_json"
+            )
 
-                    # STT: convert speech to text
-                    text = r.recognize_google(audio_data)
-                    print("Heard:", text)
+            spoken_text = whisper.text.strip()
+            if not spoken_text:
+                continue
 
-                    # Translate to English
-                    translated = translator.translate(text, dest="en").text
-                    print("Translated:", translated)
+            print("Heard:", spoken_text)
 
-                    # Display on Frame
-                    await f.display_text(translated, x=1, y=1)
+            # Translate to English
+            translated = client.responses.create(
+                model="gpt-4.1-mini",
+                input=f"Translate to English: {spoken_text}"
+            )
 
-                except Exception as e:
-                    print("Error:", e)
+            output = translated.output_text.strip()
+            print("Translated:", output)
 
-                buffer = bytearray()    # reset buffer
+            # Send to Frame display
+            await frame.send_message(0x20, output.encode("utf-8"))
+
+    except KeyboardInterrupt:
+        print("\nStopping...")
+
+    finally:
+        # Stop mic
+        await frame.send_message(0x30, TxCode(value=0).pack())
+        await frame.stop_frame_app()
+        await frame.disconnect()
+        print("Disconnected.")
 
 if __name__ == "__main__":
     asyncio.run(main())
