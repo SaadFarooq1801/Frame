@@ -1,87 +1,76 @@
 import asyncio
-from frame_msg import FrameMsg, RxAudio, TxCode
-from openai import OpenAI
+from frame_sdk import Frame
+from openai import AsyncOpenAI
 
-client = OpenAI()
+client = AsyncOpenAI()
+
+async def display_text_scroll(frame, text):
+    """
+    Displays long text by scrolling down the screen line by line.
+    """
+    max_width = 120
+    lines = []
+
+    # Break long string into multiple display-safe segments
+    while len(text) > max_width:
+        lines.append(text[:max_width])
+        text = text[max_width:]
+    lines.append(text)
+
+    # Show each chunk for readability
+    for line in lines:
+        await frame.display.set_text(line)
+        await frame.display.show()
+        await asyncio.sleep(1.5)
+
 
 async def main():
-    frame = FrameMsg()
+    async with Frame() as f:
 
-    try:
-        await frame.connect()
-        print("Connected to Frame.")
+        await f.display.set_text("Translator Ready...")
+        await f.display.show()
 
-        # Display ready message
-        await frame.print_short_text("Translator Ready")
-
-        # Upload essential Lua libs
-        await frame.upload_stdlua_libs(["data", "audio", "code"])
-
-        # Upload our custom firmware app
-        await frame.upload_frame_app("lua/translator_frame_app.lua")
-
-        # Start app
-        frame.attach_print_response_handler()
-        await frame.start_frame_app()
-
-        # Set up microphone receiver
-        rx = RxAudio(streaming=True)
-        audio_queue = await rx.attach(frame)
-
-        # Start microphone
-        print("Starting mic...")
-        await frame.send_message(0x30, TxCode(value=1).pack())
-
-        print("Listening through Frame mic... (Ctrl+C to stop)")
+        print("Listening continuously from Frame mic...")
 
         while True:
-            try:
-                samples = audio_queue.get_nowait()
+            # ---------- RECORD FROM FRAME MIC ----------
+            audio = await f.microphone.record_audio(
+                silence_cutoff_length_in_seconds=1,
+                max_length_in_seconds=5
+            )
 
-            except asyncio.QueueEmpty:
-                await asyncio.sleep(0.001)
+            if len(audio) == 0:
                 continue
 
-            if samples is None:
-                continue
+            print("Audio captured. Sending to Whisper...")
 
-            # Convert raw audio to WAV bytes
-            wav_bytes = RxAudio.to_wav_bytes(samples)
+            # ---------- SEND AUDIO TO WHISPER ----------
+            wav_bytes = audio.astype("int16").tobytes()
 
-            # Send to Whisper
-            whisper = client.audio.transcriptions.create(
+            whisper_result = await client.audio.transcriptions.create(
                 model="gpt-4o-mini-tts",
-                file=wav_bytes,
+                file=("speech.wav", wav_bytes),
                 response_format="verbose_json"
             )
 
-            spoken_text = whisper.text.strip()
-            if not spoken_text:
+            text = whisper_result.text.strip()
+            if text == "":
                 continue
 
-            print("Heard:", spoken_text)
+            print("Heard:", text)
 
-            # Translate to English
-            translated = client.responses.create(
+            # ---------- TRANSLATE ----------
+            result = await client.responses.create(
                 model="gpt-4.1-mini",
-                input=f"Translate to English: {spoken_text}"
+                input=f"Translate this to English clearly and concisely: {text}"
             )
 
-            output = translated.output_text.strip()
-            print("Translated:", output)
+            translated = result.output_text.strip()
+            print("Translated:", translated)
 
-            # Send to Frame display
-            await frame.send_message(0x20, output.encode("utf-8"))
+            # ---------- DISPLAY ON FRAME ----------
+            await display_text_scroll(f, translated)
 
-    except KeyboardInterrupt:
-        print("\nStopping...")
-
-    finally:
-        # Stop mic
-        await frame.send_message(0x30, TxCode(value=0).pack())
-        await frame.stop_frame_app()
-        await frame.disconnect()
-        print("Disconnected.")
 
 if __name__ == "__main__":
     asyncio.run(main())
