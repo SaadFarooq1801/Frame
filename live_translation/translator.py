@@ -3,19 +3,16 @@ from frame_msg import FrameMsg, RxAudio, TxCode
 from googletrans import Translator
 import speech_recognition as sr
 import io
-import wave
 
 # Initialize translator
 translator = Translator()
 
 # Configuration
-TARGET_LANGUAGE = "en"  # en, es, fr, de, ar, zh-cn, ja, etc.
-RECORDING_DURATION = 7  # seconds per recording
+TARGET_LANGUAGE = "en"
+RECORDING_DURATION = 5
 
 async def display_text_on_frame(frame, text, duration=3):
-    """
-    Display text on Frame glasses.
-    """
+    """Display text on Frame glasses."""
     try:
         await frame.print_short_text(text)
         await asyncio.sleep(duration)
@@ -23,41 +20,31 @@ async def display_text_on_frame(frame, text, duration=3):
         print(f"Display error: {e}")
 
 def transcribe_audio_from_wav(wav_bytes):
-    """
-    Transcribe audio from WAV bytes using Google Speech Recognition.
-    """
+    """Transcribe audio from WAV bytes using Google Speech Recognition."""
     recognizer = sr.Recognizer()
-    
-    # Adjust settings for better accuracy
     recognizer.energy_threshold = 300
     recognizer.dynamic_energy_threshold = True
     recognizer.pause_threshold = 0.8
     
     try:
-        # Create audio file from bytes
         audio_file = io.BytesIO(wav_bytes)
-        
         with sr.AudioFile(audio_file) as source:
             audio = recognizer.record(source)
-            
             print("🔄 Transcribing...")
-            text = recognizer.recognize_google(audio, language=None)  # Auto-detect
+            text = recognizer.recognize_google(audio, language=None)
             return text.strip()
-    
     except sr.UnknownValueError:
         print("❌ Could not understand audio")
         return ""
     except sr.RequestError as e:
-        print(f"❌ Speech Recognition API error: {e}")
+        print(f"❌ API error: {e}")
         return ""
     except Exception as e:
         print(f"❌ Transcription error: {e}")
         return ""
 
 def translate_text(text, target_lang="en"):
-    """
-    Translate text using Google Translate.
-    """
+    """Translate text using Google Translate."""
     try:
         result = translator.translate(text, dest=target_lang)
         return result.text
@@ -66,56 +53,66 @@ def translate_text(text, target_lang="en"):
         return None
 
 def detect_language(text):
-    """
-    Detect the language of text.
-    """
+    """Detect the language of text."""
     try:
         result = translator.detect(text)
         return result.lang
     except Exception as e:
-        print(f"Language detection error: {e}")
         return "unknown"
 
-async def record_audio_from_frame(frame, duration=5):
-    """
-    Record audio from Frame microphone and return WAV bytes.
-    """
+async def record_audio_from_frame(frame, rx_audio, duration=5):
+    """Record audio from Frame microphone and return WAV bytes."""
     try:
-        # Hook up the RxAudio receiver
-        rx_audio = RxAudio()
-        audio_queue = await rx_audio.attach(frame)
+        # Clear any pending audio
+        while not rx_audio.audio_queue.empty():
+            try:
+                rx_audio.audio_queue.get_nowait()
+            except:
+                break
         
-        # Start streaming audio
-        print(f"🎤 Recording for {duration} seconds...")
+        print(f"🎤 Recording for {duration} seconds - SPEAK NOW!")
+        
+        # Start streaming
         await frame.send_message(0x30, TxCode(value=1).pack())
+        await asyncio.sleep(0.2)  # Give it time to start
         
-        # Record for specified duration
+        # Record for duration
         await asyncio.sleep(duration)
         
         # Stop streaming
         await frame.send_message(0x30, TxCode(value=0).pack())
+        await asyncio.sleep(0.2)  # Give it time to flush
         
-        # Get the audio samples
-        audio_samples = await asyncio.wait_for(audio_queue.get(), timeout=10.0)
+        # Get audio samples with longer timeout
+        print("⏳ Waiting for audio data...")
+        audio_samples = await asyncio.wait_for(
+            rx_audio.audio_queue.get(), 
+            timeout=15.0
+        )
         
-        # Convert to WAV bytes
+        if len(audio_samples) == 0:
+            print("⚠️  Empty audio buffer")
+            return None
+        
+        # Convert to WAV
         wav_bytes = RxAudio.to_wav_bytes(audio_samples)
+        print(f"✅ Captured {len(wav_bytes)} bytes ({len(audio_samples)} samples)")
         
-        # Clean up
-        rx_audio.detach(frame)
-        
-        print(f"✅ Captured {len(wav_bytes)} bytes of audio")
         return wav_bytes
     
     except asyncio.TimeoutError:
-        print("❌ Timeout waiting for audio")
+        print("❌ Timeout - no audio received from Frame")
+        print("   Check: Is Frame mic working? Try tapping the Frame.")
         return None
     except Exception as e:
         print(f"❌ Recording error: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 async def main():
     frame = FrameMsg()
+    rx_audio = None
     
     try:
         print("=" * 60)
@@ -126,10 +123,9 @@ async def main():
         print("Press Ctrl+C to stop")
         print("=" * 60)
         
-        # Connect to Frame
+        # Connect
         print("\n📡 Connecting to Frame...")
         await frame.connect()
-        
         await display_text_on_frame(frame, "Connecting...", 1)
         
         # Check battery
@@ -139,23 +135,28 @@ async def main():
         )
         print(f"🔋 Battery/Memory: {batt_mem}")
         
-        # Upload standard Lua libraries
+        # Upload Lua libraries
         print("📤 Uploading Lua libraries...")
         await frame.upload_stdlua_libs(lib_names=['data', 'code', 'audio'])
         
-        # Upload the Frame app
+        # Upload Frame app
         print("📤 Uploading Frame app...")
         await frame.upload_frame_app(local_filename="lua/audio_frame_app.lua")
         
-        # Attach print handler
+        # Attach handlers
         frame.attach_print_response_handler()
         
-        # Start the Frame app
+        # Start Frame app
         print("🚀 Starting Frame app...")
         await frame.start_frame_app()
         
-        await display_text_on_frame(frame, "Ready!", 2)
+        # Set up RxAudio ONCE and keep it attached
+        print("🎧 Setting up audio receiver...")
+        rx_audio = RxAudio()
+        audio_queue = await rx_audio.attach(frame)
+        rx_audio.audio_queue = audio_queue
         
+        await display_text_on_frame(frame, "Ready!", 2)
         print("\n✅ Frame initialized successfully!\n")
         
         # Main translation loop
@@ -167,18 +168,18 @@ async def main():
             print(f"Recording #{recording_count}")
             print(f"{'='*60}")
             
-            # Show listening indicator
             await display_text_on_frame(frame, "Listening...", 0.5)
             
-            # Record audio from Frame
-            wav_bytes = await record_audio_from_frame(frame, RECORDING_DURATION)
+            # Record audio
+            wav_bytes = await record_audio_from_frame(frame, rx_audio, RECORDING_DURATION)
             
             if wav_bytes is None or len(wav_bytes) == 0:
                 print("⚠️  No audio captured")
                 await display_text_on_frame(frame, "No audio", 1)
+                await asyncio.sleep(1)
                 continue
             
-            # Show processing status
+            # Process
             await display_text_on_frame(frame, "Processing...", 0.5)
             
             # Transcribe
@@ -193,7 +194,7 @@ async def main():
             detected_lang = detect_language(text)
             print(f"✅ Heard ({detected_lang}): '{text}'")
             
-            # Skip translation if already in target language
+            # Skip if already in target language
             if detected_lang == TARGET_LANGUAGE:
                 print(f"✓ Already in {TARGET_LANGUAGE}")
                 await display_text_on_frame(frame, text, 4)
@@ -201,7 +202,6 @@ async def main():
             
             # Translate
             await display_text_on_frame(frame, "Translating...", 0.5)
-            
             translated = translate_text(text, TARGET_LANGUAGE)
             
             if translated is None or translated == "":
@@ -211,11 +211,11 @@ async def main():
             
             print(f"🌍 Translated: '{translated}'")
             
-            # Display translation on Frame
+            # Display
             await display_text_on_frame(frame, translated, 5)
             
-            print("\n⏳ Ready for next recording...")
-            await asyncio.sleep(1)
+            print("\n⏳ Ready for next recording in 2 seconds...")
+            await asyncio.sleep(2)
     
     except KeyboardInterrupt:
         print("\n\n👋 Stopping translator...")
@@ -231,8 +231,10 @@ async def main():
             pass
     
     finally:
-        # Clean disconnection
+        # Cleanup
         try:
+            if rx_audio:
+                rx_audio.detach(frame)
             frame.detach_print_response_handler()
             await frame.stop_frame_app()
             await frame.disconnect()
