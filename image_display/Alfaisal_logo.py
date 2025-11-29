@@ -1,15 +1,30 @@
 import asyncio
 from pathlib import Path
-from frame_sdk import Frame
-from frame_sdk.txsprite import TxSprite
+from frame_msg import FrameMsg, TxSprite    # <-- CORRECT import
 
 async def main():
-    async with Frame() as f:
-        # Load image
-        image_bytes = Path("images/alfaisal_logo.jpg").read_bytes()
-        sprite = TxSprite.from_image_bytes(image_bytes)
+    frame = FrameMsg()
 
-        # Send to Frame
-        await f.send_message(0x20, sprite.pack())
+    try:
+        await frame.connect()
+        await frame.print_short_text("Loading Alfaisal Logo...")
+
+        await frame.upload_stdlua_libs(lib_names=["data", "sprite"])
+        await frame.upload_frame_app("lua/sprite_frame_app.lua")
+
+        frame.attach_print_response_handler()
+        await frame.start_frame_app()
+
+        sprite = TxSprite.from_image_bytes(Path("images/alfaisal.png").read_bytes())
+        await frame.send_message(0x20, sprite.pack())
+
+        await asyncio.sleep(5)
+        await frame.stop_frame_app()
+
+    except Exception as e:
+        print("Error:", e)
+
+    finally:
+        await frame.disconnect()
 
 asyncio.run(main())
