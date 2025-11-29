@@ -1,2 +1,4 @@
-frame-sdk
-Pillow  
+frame-msg
+frame-ble
+numpy
+Pillow
