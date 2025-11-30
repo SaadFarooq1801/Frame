@@ -1,6 +1,6 @@
 import asyncio
 from pathlib import Path
-from frame_msg import FrameMsg, TxSprite    # <-- CORRECT import
+from frame_msg import FrameMsg, TxSprite 
 
 async def main():
     frame = FrameMsg()
