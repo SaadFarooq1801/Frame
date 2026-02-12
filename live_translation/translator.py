@@ -4,10 +4,8 @@ from googletrans import Translator
 import speech_recognition as sr
 import io
 
-# Initialize translator
 translator = Translator()
 
-# Configuration
 TARGET_LANGUAGE = "en"
 RECORDING_DURATION = 5
 
