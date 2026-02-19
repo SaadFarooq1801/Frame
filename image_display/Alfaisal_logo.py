@@ -15,7 +15,7 @@ async def main():
         frame.attach_print_response_handler()
         await frame.start_frame_app()
 
-        sprite = TxSprite.from_image_bytes(Path("images/alfaisal.png").read_bytes())
+        sprite = TxSprite.from_image_bytes(Path("images/alfaisal.png").read_bytes())    #change image path here for different image
         await frame.send_message(0x20, sprite.pack())
 
         await asyncio.sleep(5)
