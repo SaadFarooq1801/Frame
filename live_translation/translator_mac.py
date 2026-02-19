@@ -3,22 +3,13 @@ from frame_sdk import Frame
 from googletrans import Translator
 import speech_recognition as sr
 
-# Initialize
 translator = Translator()
 recognizer = sr.Recognizer()
 
-# Configuration
 TARGET_LANGUAGE = "en"
 
 async def display_text_scroll(frame, text, scroll_delay=2.0):
-    """
-    Displays text on Frame with word wrapping.
-    """
-    max_width = 640
-    lines = []
-    
-    words = text.split()
-    current_line = ""
+    #Displays text on Frame with word wrapping.
     
     for word in words:
         test_line = current_line + word + " "
@@ -39,10 +30,7 @@ async def display_text_scroll(frame, text, scroll_delay=2.0):
         else:
             await asyncio.sleep(scroll_delay * 1.5)
 
-def record_and_transcribe_from_mac():
-    """
-    Record audio from Mac microphone and transcribe.
-    """
+def record_and_transcribe_from_mac():  # Record audio from Mac microphone and transcribe.
     try:
         with sr.Microphone() as source:
             print("🎤 Listening from Mac microphone...")
@@ -69,10 +57,7 @@ def record_and_transcribe_from_mac():
         print(f"❌ Error: {e}")
         return ""
 
-def translate_text(text, target_lang="en"):
-    """
-    Translate text using Google Translate.
-    """
+def translate_text(text, target_lang="en"):     #Translate text using Google Translate.
     try:
         result = translator.translate(text, dest=target_lang)
         return result.text
@@ -80,10 +65,7 @@ def translate_text(text, target_lang="en"):
         print(f"Translation error: {e}")
         return None
 
-def detect_language(text):
-    """
-    Detect language of text.
-    """
+def detect_language(text):   #Detect language of text.
     try:
         result = translator.detect(text)
         return result.lang
@@ -91,16 +73,13 @@ def detect_language(text):
         print(f"Language detection error: {e}")
         return "unknown"
 
-async def main():
-    # Check if Frame is available
+async def main():   #Check if Frame is available
     frame_available = True
     frame = None
-    
     try:
         # Use async context manager for Frame connection
         async with Frame() as frame:
-            print("✅ Frame connected!")
-            
+            print("✅ Frame connected!")  
             print("=" * 60)
             print("LIVE TRANSLATOR (Mac Microphone → Frame Display)")
             print("=" * 60)
@@ -134,7 +113,7 @@ async def main():
                     detected_lang = detect_language(text)
                     print(f"✅ Heard ({detected_lang}): '{text}'")
                     
-                    # Skip translation if already in target language
+                    # Skips translation if already in target language
                     if detected_lang == TARGET_LANGUAGE:
                         print(f"✓ Already in {TARGET_LANGUAGE}")
                         await display_text_scroll(frame, text)
@@ -175,8 +154,6 @@ async def main():
         print(f"⚠️  Frame not connected: {e}")
         print("   Running in Mac-only mode (no Frame display)\n")
         frame_available = False
-        
-        # Fallback: Run without Frame
         print("=" * 60)
         print("LIVE TRANSLATOR (Mac Microphone Only)")
         print("=" * 60)
