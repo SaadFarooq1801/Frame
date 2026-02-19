@@ -7,6 +7,8 @@ In this repo you will find 3 different programs; Image display, msg display, & l
 
 
 
+
+------------------------------------------------------------------------------------------------------
 ## Setup
 clone this repo onto your device and run in a virtual enviroment.
 python3 -m venv venv
