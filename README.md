@@ -3,8 +3,11 @@ Programs for Frame by Brillant Labs
 
 In this repo you will find 3 different programs; Image display, msg display, & live translation.
 
+live translation has only been tested on mac, testing on window devices still in progress. (It may or may not work)
+
 lua is the main programming language frame, it allows direct communication with the frame’s hardware peripherals.
 Make sure lua files/folder are present when running "image display" & "live_translation".
+
 
 
 
