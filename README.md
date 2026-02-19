@@ -8,6 +8,8 @@ live translation has only been tested on mac, testing on window devices still in
 lua is the main programming language frame, it allows direct communication with the frame’s hardware peripherals.
 Make sure lua files/folder are present when running "image display" & "live_translation".
 
+Link for Frame Libraries:
+https://docs.brilliant.xyz/frame/frame-sdk-lua/
 
 
 
