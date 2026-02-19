@@ -10,7 +10,6 @@ TARGET_LANGUAGE = "en"
 RECORDING_DURATION = 5
 
 async def display_text_on_frame(frame, text, duration=3):
-    """Display text on Frame glasses."""
     try:
         await frame.print_short_text(text)
         await asyncio.sleep(duration)
@@ -18,7 +17,7 @@ async def display_text_on_frame(frame, text, duration=3):
         print(f"Display error: {e}")
 
 def transcribe_audio_from_wav(wav_bytes):
-    """Transcribe audio from WAV bytes using Google Speech Recognition."""
+    #Transcribe audio from WAV bytes using Google Speech Recognition.
     recognizer = sr.Recognizer()
     recognizer.energy_threshold = 300
     recognizer.dynamic_energy_threshold = True
@@ -42,7 +41,7 @@ def transcribe_audio_from_wav(wav_bytes):
         return ""
 
 def translate_text(text, target_lang="en"):
-    """Translate text using Google Translate."""
+    #Translate text using Google Translate.
     try:
         result = translator.translate(text, dest=target_lang)
         return result.text
@@ -51,7 +50,7 @@ def translate_text(text, target_lang="en"):
         return None
 
 def detect_language(text):
-    """Detect the language of text."""
+    #Detect the language of text.
     try:
         result = translator.detect(text)
         return result.lang
@@ -192,7 +191,7 @@ async def main():
             detected_lang = detect_language(text)
             print(f"✅ Heard ({detected_lang}): '{text}'")
             
-            # Skip if already in target language
+            # Skips if already in target language
             if detected_lang == TARGET_LANGUAGE:
                 print(f"✓ Already in {TARGET_LANGUAGE}")
                 await display_text_on_frame(frame, text, 4)
