@@ -3,14 +3,16 @@ Programs for Frame by Brillant Labs
 
 In this repo you will find 3 different programs; Image display, msg display, & live translation.
 
+lua is the main programming language frame, it allows direct communication with the frame’s hardware peripherals.
+Make sure lua files/folder are present when running "image display" & "live_translation".
 
 
 
-
-
+Recommended set up is below
 ------------------------------------------------------------------------------------------------------
 ## Setup
 clone this repo onto your device and run in a virtual enviroment.
+
 python3 -m venv venv
 source venv/bin/activate
 
