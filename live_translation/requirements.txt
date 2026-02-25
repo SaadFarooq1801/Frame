@@ -4,3 +4,5 @@ SpeechRecognition
 numpy
 PyAudio
 frame-msg
+openai-whisper
+soundfile
