@@ -8,12 +8,12 @@ live translation has only been tested on mac, testing on window devices still in
 lua is the main programming language frame, it allows direct communication with the frame’s hardware peripherals.
 Make sure lua files/folder are present when running "image display" & "live_translation".
 
+--------------------------------------------------------------------------
 ## Live Translation
 Live translation uses **OpenAI Whisper** for on-device speech recognition (no API key needed).
 
 ### First-Run Model Download
 On the first run, Whisper will automatically download the `small` model (~460MB):
-100%|████████████| 460M/460M [downloading small.pt]
 The model is cached at `~/.cache/whisper/small.pt` and **never downloaded again** on the same machine.
 
 **Note for corporate/university networks:** If you get an SSL certificate error on first run, this is caused by a network proxy. The code already handles this automatically.
@@ -30,7 +30,7 @@ You can change the model in `translator_mac.py` to trade off speed vs accuracy:
 | `large` | 3GB | Best accuracy |
 
 
-
+----------------------------------------------------------
 
 Link for Frame Libraries:
 https://docs.brilliant.xyz/frame/frame-sdk-lua/
