@@ -1,3 +1,9 @@
+import ssl
+# Fix for corporate/institutional networks with self-signed SSL proxy certificates.
+# Only needed for the one-time Whisper model download (~150MB).
+# After the model is cached in ~/.cache/whisper/, no network calls are made.
+ssl._create_default_https_context = ssl._create_unverified_context
+
 import asyncio
 from frame_sdk import Frame
 from googletrans import Translator
@@ -9,8 +15,12 @@ recognizer = sr.Recognizer()
 TARGET_LANGUAGE = "en"
 
 async def display_text_scroll(frame, text, scroll_delay=2.0):
-    #Displays text on Frame with word wrapping.
-    
+    """Displays text on Frame with word wrapping."""
+    max_width = 24  # characters per line on Frame display
+    words = text.split()
+    lines = []
+    current_line = ""
+
     for word in words:
         test_line = current_line + word + " "
         if len(test_line) <= max_width:
@@ -19,10 +29,10 @@ async def display_text_scroll(frame, text, scroll_delay=2.0):
             if current_line:
                 lines.append(current_line.strip())
             current_line = word + " "
-    
+
     if current_line:
         lines.append(current_line.strip())
-    
+
     for i, line in enumerate(lines):
         await frame.display.show_text(line, 50, 100)
         if i < len(lines) - 1:
@@ -30,20 +40,43 @@ async def display_text_scroll(frame, text, scroll_delay=2.0):
         else:
             await asyncio.sleep(scroll_delay * 1.5)
 
-def record_and_transcribe_from_mac():  # Record audio from Mac microphone and transcribe.
+def _record_audio():
+    """Record audio from Mac microphone. Runs in a thread."""
+    with sr.Microphone() as source:
+        print("🎤 Listening from Mac microphone...")
+        print("   (Adjusting for ambient noise...)")
+        recognizer.adjust_for_ambient_noise(source, duration=0.5)
+        print("   Speak now!")
+        audio = recognizer.listen(source, timeout=10, phrase_time_limit=15)
+    return audio
+
+
+def _transcribe_audio(audio):
+    """Transcribe using local OpenAI Whisper (on-device, no internet needed)."""
+    # "small" is significantly more accurate than "base" for multilingual speech.
+    # No language specified → Whisper auto-detects the spoken language.
+    # Options (best→slowest): tiny, base, small, medium, large
+    return recognizer.recognize_whisper(audio, model="small")
+
+
+async def record_and_transcribe_from_mac():
+    """Record audio from Mac microphone and transcribe (non-blocking)."""
+    loop = asyncio.get_event_loop()
     try:
-        with sr.Microphone() as source:
-            print("🎤 Listening from Mac microphone...")
-            print("   (Adjusting for ambient noise...)")
-            recognizer.adjust_for_ambient_noise(source, duration=0.5)
-            
-            print("   Speak now!")
-            audio = recognizer.listen(source, timeout=10, phrase_time_limit=15)
-            
-            print("🔄 Transcribing...")
-            text = recognizer.recognize_google(audio)
-            return text.strip()
-    
+        # Recording is blocking I/O — run in thread so event loop stays alive
+        audio = await loop.run_in_executor(None, _record_audio)
+
+        print("🔄 Transcribing (local Whisper)...")
+        # Whisper runs locally but is CPU-bound — run in thread to keep event loop alive
+        text = await asyncio.wait_for(
+            loop.run_in_executor(None, _transcribe_audio, audio),
+            timeout=60.0  # local processing can take longer on first run (model load)
+        )
+        return text.strip()
+
+    except asyncio.TimeoutError:
+        print("⏱️  Transcription timed out")
+        return ""
     except sr.WaitTimeoutError:
         print("⏱️  Timeout - no speech detected")
         return ""
@@ -102,7 +135,7 @@ async def main():   #Check if Frame is available
                     await frame.display.show_text("Listening...", 50, 100)
                     
                     # Record and transcribe from Mac mic
-                    text = record_and_transcribe_from_mac()
+                    text = await record_and_transcribe_from_mac()
                     
                     if text == "":
                         await frame.display.show_text("No speech", 50, 100)
@@ -172,7 +205,7 @@ async def main():   #Check if Frame is available
                 print(f"{'='*60}")
                 
                 # Record and transcribe from Mac mic
-                text = record_and_transcribe_from_mac()
+                text = await record_and_transcribe_from_mac()
                 
                 if text == "":
                     continue
