@@ -1,57 +1,44 @@
--- Audio Frame App for Live Translation
-local data = require('data.min')
-local audio = require('audio.min')
-local code = require('code.min')
+-- audio_frame_app.lua
+-- Uses the frame_msg audio library (audio.min) which wraps the correct
+-- Lua microphone API: frame.microphone.start/read/stop, frame.bluetooth.send.
+-- RxAudio(streaming=True) on the Python side expects 0x05/0x06 prefixed chunks.
 
--- Message codes
-local AUDIO_CTRL = 0x30
+local audio = require("audio.min")
 
--- Global state
-local streaming = false
-
--- Audio control handler
-data.parsers[AUDIO_CTRL] = function(msg)
-    local ctrl = code.parse_code(msg.data)
-    print("Audio control received: " .. tostring(ctrl))
-    
-    if ctrl == 1 then
-        -- Start audio streaming
-        streaming = true
-        audio.start_audio_stream()
-        print("Audio stream STARTED")
-    elseif ctrl == 0 then
-        -- Stop audio streaming
-        streaming = false
-        audio.stop_audio_stream()
-        print("Audio stream STOPPED")
-    end
+-- Ping: Python calls this to verify the app is alive and start_record exists
+function _G.ping()
+    local tf = tostring(_G.start_record ~= nil)
+    print("PING_RESP:ALIVE:TOGGLE_FUNC=" .. tf)
 end
 
--- Main app loop
-function app_loop()
-    frame.display.clear()
-    frame.display.text("Audio Ready", 50, 100)
-    frame.display.show()
-    
-    -- Signal ready to Python
-    print("ready")
-    
-    while true do
-        local ok, err = pcall(function()
-            -- Process incoming control messages
-            local items = data.process_raw_items()
-            
-            -- If streaming, audio.min automatically sends samples
-            -- via the data channel back to Python
-            
-            frame.sleep(0.01)
-        end)
-        
-        if not ok then
-            print("Error: " .. tostring(err))
-            frame.sleep(1)
-        end
+-- start_record(seconds): called by Python via send_lua()
+-- Streams audio chunks to Python for the requested duration, then sends 0x06.
+function _G.start_record(seconds)
+    seconds = seconds or 5
+    print("RECORD:STARTING")
+
+    -- Start FPGA microphone: 8kHz, 8-bit matches RxAudio.to_wav_bytes() defaults
+    audio.start({sample_rate=8000, bit_depth=8})
+
+    -- Stream audio for the requested duration.
+    -- frame.sleep() is the most reliable timing primitive available.
+    -- We read in bursts to keep up with the mic; sleep(0) yields to BT stack.
+    local stop_time = frame.time.utc() + seconds
+    while frame.time.utc() < stop_time do
+        audio.read_and_send_audio()
+        frame.sleep(0)  -- yield to Bluetooth stack between reads
     end
+
+    -- Stop the mic; next read() returns nil which sends the 0x06 FINAL sentinel
+    audio.stop()
+    frame.sleep(0.05)
+    audio.read_and_send_audio()  -- flushes nil → sends FINAL (0x06) to Python
+
+    print("RECORD:DONE")
 end
 
-app_loop()
+-- Init: show ready state and return immediately so the interpreter
+-- stays free to handle send_lua() calls (ping, start_record, etc.)
+frame.display.text("Translator Ready", 50, 100)
+frame.display.show()
+print("APP:READY")
