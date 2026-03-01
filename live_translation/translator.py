@@ -1,8 +1,20 @@
+import os
+import ssl
+import time
+# Fix for networks with self-signed SSL proxy certs (only needed for one-time Whisper model download)
+ssl._create_default_https_context = ssl._create_unverified_context
+
 import asyncio
 from frame_msg import FrameMsg, RxAudio, TxCode
 from googletrans import Translator
 import speech_recognition as sr
 import io
+
+# Get the directory where the script is located to handle file paths correctly
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# Directory for saving debug recordings
+RECORDINGS_DIR = os.path.join(SCRIPT_DIR, "recordings")
+os.makedirs(RECORDINGS_DIR, exist_ok=True)
 
 translator = Translator()
 
@@ -16,25 +28,32 @@ async def display_text_on_frame(frame, text, duration=3):
     except Exception as e:
         print(f"Display error: {e}")
 
-def transcribe_audio_from_wav(wav_bytes):
-    #Transcribe audio from WAV bytes using Google Speech Recognition.
-    recognizer = sr.Recognizer()
-    recognizer.energy_threshold = 300
-    recognizer.dynamic_energy_threshold = True
-    recognizer.pause_threshold = 0.8
-    
+_recognizer = sr.Recognizer()
+
+def _run_whisper(wav_bytes):
+    """Transcribe WAV bytes using local Whisper. Runs in a thread (CPU-bound)."""
+    audio_file = io.BytesIO(wav_bytes)
+    with sr.AudioFile(audio_file) as source:
+        audio = _recognizer.record(source)
+    # model="small" — good multilingual accuracy, fully on-device, no internet needed
+    return _recognizer.recognize_whisper(audio, model="small")
+
+
+async def transcribe_audio_from_wav(wav_bytes):
+    """Async wrapper: transcribes WAV bytes with local Whisper in a background thread."""
+    loop = asyncio.get_event_loop()
     try:
-        audio_file = io.BytesIO(wav_bytes)
-        with sr.AudioFile(audio_file) as source:
-            audio = recognizer.record(source)
-            print("🔄 Transcribing...")
-            text = recognizer.recognize_google(audio, language=None)
-            return text.strip()
+        print("🔄 Transcribing (local Whisper)...")
+        text = await asyncio.wait_for(
+            loop.run_in_executor(None, _run_whisper, wav_bytes),
+            timeout=60.0  # generous: first run loads model into memory
+        )
+        return text.strip()
+    except asyncio.TimeoutError:
+        print("⏱️  Transcription timed out")
+        return ""
     except sr.UnknownValueError:
         print("❌ Could not understand audio")
-        return ""
-    except sr.RequestError as e:
-        print(f"❌ API error: {e}")
         return ""
     except Exception as e:
         print(f"❌ Transcription error: {e}")
@@ -58,54 +77,77 @@ def detect_language(text):
         return "unknown"
 
 async def record_audio_from_frame(frame, rx_audio, duration=5):
-    """Record audio from Frame microphone and return WAV bytes."""
-    try:
-        # Clear any pending audio
-        while not rx_audio.audio_queue.empty():
-            try:
-                rx_audio.audio_queue.get_nowait()
-            except:
-                break
-        
-        print(f"🎤 Recording for {duration} seconds - SPEAK NOW!")
-        
-        # Start streaming
-        await frame.send_message(0x30, TxCode(value=1).pack())
-        await asyncio.sleep(0.2)  # Give it time to start
-        
-        # Record for duration
-        await asyncio.sleep(duration)
-        
-        # Stop streaming
-        await frame.send_message(0x30, TxCode(value=0).pack())
-        await asyncio.sleep(0.2)  # Give it time to flush
-        
-        # Get audio samples with longer timeout
-        print("⏳ Waiting for audio data...")
-        audio_samples = await asyncio.wait_for(
-            rx_audio.audio_queue.get(), 
-            timeout=15.0
-        )
-        
-        if len(audio_samples) == 0:
-            print("⚠️  Empty audio buffer")
-            return None
-        
-        # Convert to WAV
-        wav_bytes = RxAudio.to_wav_bytes(audio_samples)
-        print(f"✅ Captured {len(wav_bytes)} bytes ({len(audio_samples)} samples)")
-        
-        return wav_bytes
+    """Record audio from Frame microphone and return WAV bytes.
     
-    except asyncio.TimeoutError:
-        print("❌ Timeout - no audio received from Frame")
-        print("   Check: Is Frame mic working? Try tapping the Frame.")
-        return None
+    Calls start_record(seconds) on the Lua side, which records for `duration`
+    seconds, streams chunks back with 0x05/0x06 sentinels, then exits.
+    RxAudio(streaming=True) receives chunks via its queue.
+    """
+    queue = rx_audio.queue
+
+    # Drain any stale chunks left from a previous recording
+    while not queue.empty():
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+
+    print(f"🎤 Recording for {duration} seconds - SPEAK NOW!")
+
+    # Verify Lua app is alive and start_record exists
+    print("🔍 Verifying Frame app state...")
+    try:
+        verif = await frame.send_lua("ping()", await_print=True)
+        print(f"📡 App Status: {verif}")
+        if "TOGGLE_FUNC=true" not in verif:
+            print("❌ start_record not found on Frame. Re-uploading app...")
+            return "RETRY_UPLOAD"
     except Exception as e:
-        print(f"❌ Recording error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"⚠️ Verification error: {e}")
+
+    # Kick off start_record on the Frame (non-blocking send — Lua streams back chunks)
+    print("▶️ Starting recording on Frame...")
+    await frame.send_lua(f"start_record({duration})")
+
+    # Collect chunks until the Lua function finishes streaming.
+    # Give a generous timeout: duration + 10s for Bluetooth overhead.
+    timeout = duration + 10
+    pcm_chunks = []
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        remaining = deadline - asyncio.get_event_loop().time()
+        try:
+            chunk = await asyncio.wait_for(queue.get(), timeout=min(remaining, 1.0))
+            if chunk is None:
+                # None sentinel means the final 0x06 chunk was received — done
+                break
+            pcm_chunks.append(chunk)
+            print(f"  (Received {len(pcm_chunks)} chunks...)", end="\r")
+        except asyncio.TimeoutError:
+            pass
+
+    print()  # newline after \r progress
+
+    if not pcm_chunks:
+        print("⚠️  Empty audio buffer — no chunks received from Frame mic")
         return None
+
+    # Concatenate all PCM chunks and wrap in a WAV container
+    pcm_data = b"".join(pcm_chunks)
+    wav_bytes = RxAudio.to_wav_bytes(pcm_data)
+    
+    # Save recording to file for debugging
+    filename = f"capture_{int(time.time())}.wav"
+    filepath = os.path.join(RECORDINGS_DIR, filename)
+    try:
+        with open(filepath, "wb") as f:
+            f.write(wav_bytes)
+        print(f"💾 Saved to {filepath}")
+    except Exception as e:
+        print(f"⚠️ Failed to save audio file: {e}")
+
+    print(f"✅ Captured {len(wav_bytes)} bytes ({len(pcm_data)} PCM bytes, {len(pcm_chunks)} chunks)")
+    return wav_bytes
 
 async def main():
     frame = FrameMsg()
@@ -136,9 +178,10 @@ async def main():
         print("📤 Uploading Lua libraries...")
         await frame.upload_stdlua_libs(lib_names=['data', 'code', 'audio'])
         
-        # Upload Frame app
+        # Upload Frame app - use absolute path
         print("📤 Uploading Frame app...")
-        await frame.upload_frame_app(local_filename="lua/audio_frame_app.lua")
+        app_path = os.path.join(SCRIPT_DIR, "lua/audio_frame_app.lua")
+        await frame.upload_frame_app(local_filename=app_path)
         
         # Attach handlers
         frame.attach_print_response_handler()
@@ -148,10 +191,10 @@ async def main():
         await frame.start_frame_app()
         
         # Set up RxAudio ONCE and keep it attached
+        # streaming=True: chunks arrive immediately on the queue — no waiting for a final sentinel
         print("🎧 Setting up audio receiver...")
-        rx_audio = RxAudio()
-        audio_queue = await rx_audio.attach(frame)
-        rx_audio.audio_queue = audio_queue
+        rx_audio = RxAudio(streaming=True)
+        await rx_audio.attach(frame)
         
         await display_text_on_frame(frame, "Ready!", 2)
         print("\n✅ Frame initialized successfully!\n")
@@ -168,7 +211,17 @@ async def main():
             await display_text_on_frame(frame, "Listening...", 0.5)
             
             # Record audio
-            wav_bytes = await record_audio_from_frame(frame, rx_audio, RECORDING_DURATION)
+            result = await record_audio_from_frame(frame, rx_audio, RECORDING_DURATION)
+            
+            if result == "RETRY_UPLOAD":
+                print("♻️ Re-uploading app...")
+                app_path = os.path.join(SCRIPT_DIR, "lua/audio_frame_app.lua")
+                await frame.upload_frame_app(local_filename=app_path)
+                await frame.start_frame_app()
+                await asyncio.sleep(1)
+                continue
+
+            wav_bytes = result
             
             if wav_bytes is None or len(wav_bytes) == 0:
                 print("⚠️  No audio captured")
@@ -180,7 +233,7 @@ async def main():
             await display_text_on_frame(frame, "Processing...", 0.5)
             
             # Transcribe
-            text = transcribe_audio_from_wav(wav_bytes)
+            text = await transcribe_audio_from_wav(wav_bytes)
             
             if text == "":
                 print("❌ No speech recognized")
