@@ -1,0 +1,5 @@
+frame-msg
+frame-ble
+numpy
+Pillow
+google-generativeai

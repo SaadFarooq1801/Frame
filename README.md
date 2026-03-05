@@ -1,12 +1,16 @@
 # Frame
 Programs for Frame by Brillant Labs
 
-In this repo you will find 3 different programs; Image display, msg display, & live translation.
+In this repo you will find 4 different programs:
+- Image display
+- Msg display
+- Live translation
+- Object detection
 
 live translation has only been tested on mac, testing on window devices still in progress. (It may or may not work)
 
 lua is the main programming language frame, it allows direct communication with the frame’s hardware peripherals.
-Make sure lua files/folder are present when running "image display" & "live_translation".
+Make sure lua files/folder are present when running "image display", "live_translation", and "object_detection".
 
 --------------------------------------------------------------------------
 ## Live Translation
@@ -29,6 +33,17 @@ You can change the model in `translator_mac.py` to trade off speed vs accuracy:
 | `medium` | 1.5GB | High accuracy, slower |
 | `large` | 3GB | Best accuracy |
 
+--------------------------------------------------------------------------
+## Object Detection
+The object detection module uses the Frame camera to stream JPEG photos over Bluetooth to your Mac/PC, where it runs **YOLOv8** (nano) to detect objects in real-time. The top detected label is then sent back to the Frame display.
+
+### Setup
+1. `cd object_detection/`
+2. `pip install -r requirements.txt` (inside your venv)
+3. Connect your Frame via Bluetooth.
+4. Run `python detector.py`
+
+*Note: The YOLOv8 nano model (`yolov8n.pt`) is downloaded automatically on the first run (~6 MB).*
 
 ----------------------------------------------------------
 
