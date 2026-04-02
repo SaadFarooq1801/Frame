@@ -1,7 +1,4 @@
 import ssl
-# Fix for corporate/institutional networks with self-signed SSL proxy certificates.
-# Only needed for the one-time Whisper model download (~150MB).
-# After the model is cached in ~/.cache/whisper/, no network calls are made.
 ssl._create_default_https_context = ssl._create_unverified_context
 
 import asyncio
