@@ -2,7 +2,6 @@ import os
 import ssl
 import time
 ssl._create_default_https_context = ssl._create_unverified_context
-
 import asyncio
 from frame_msg import FrameMsg, RxAudio, TxCode
 from googletrans import Translator
@@ -11,12 +10,10 @@ import io
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-
 RECORDINGS_DIR = os.path.join(SCRIPT_DIR, "recordings")
 os.makedirs(RECORDINGS_DIR, exist_ok=True)
 
 translator = Translator()
-
 TARGET_LANGUAGE = "en"
 RECORDING_DURATION = 5
 
