@@ -1,7 +1,6 @@
 import os
 import ssl
 import time
-# Fix for networks with self-signed SSL proxy certs (only needed for one-time Whisper model download)
 ssl._create_default_https_context = ssl._create_unverified_context
 
 import asyncio
@@ -10,9 +9,9 @@ from googletrans import Translator
 import speech_recognition as sr
 import io
 
-# Get the directory where the script is located to handle file paths correctly
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-# Directory for saving debug recordings
+
 RECORDINGS_DIR = os.path.join(SCRIPT_DIR, "recordings")
 os.makedirs(RECORDINGS_DIR, exist_ok=True)
 
@@ -31,16 +30,13 @@ async def display_text_on_frame(frame, text, duration=3):
 _recognizer = sr.Recognizer()
 
 def _run_whisper(wav_bytes):
-    """Transcribe WAV bytes using local Whisper. Runs in a thread (CPU-bound)."""
     audio_file = io.BytesIO(wav_bytes)
     with sr.AudioFile(audio_file) as source:
         audio = _recognizer.record(source)
-    # model="small" — good multilingual accuracy, fully on-device, no internet needed
     return _recognizer.recognize_whisper(audio, model="small")
 
 
 async def transcribe_audio_from_wav(wav_bytes):
-    """Async wrapper: transcribes WAV bytes with local Whisper in a background thread."""
     loop = asyncio.get_event_loop()
     try:
         print("🔄 Transcribing (local Whisper)...")
@@ -60,7 +56,6 @@ async def transcribe_audio_from_wav(wav_bytes):
         return ""
 
 def translate_text(text, target_lang="en"):
-    #Translate text using Google Translate.
     try:
         result = translator.translate(text, dest=target_lang)
         return result.text
@@ -69,7 +64,6 @@ def translate_text(text, target_lang="en"):
         return None
 
 def detect_language(text):
-    #Detect the language of text.
     try:
         result = translator.detect(text)
         return result.lang
@@ -77,15 +71,8 @@ def detect_language(text):
         return "unknown"
 
 async def record_audio_from_frame(frame, rx_audio, duration=5):
-    """Record audio from Frame microphone and return WAV bytes.
-    
-    Calls start_record(seconds) on the Lua side, which records for `duration`
-    seconds, streams chunks back with 0x05/0x06 sentinels, then exits.
-    RxAudio(streaming=True) receives chunks via its queue.
-    """
     queue = rx_audio.queue
 
-    # Drain any stale chunks left from a previous recording
     while not queue.empty():
         try:
             queue.get_nowait()
@@ -93,8 +80,6 @@ async def record_audio_from_frame(frame, rx_audio, duration=5):
             break
 
     print(f"🎤 Recording for {duration} seconds - SPEAK NOW!")
-
-    # Verify Lua app is alive and start_record exists
     print("🔍 Verifying Frame app state...")
     try:
         verif = await frame.send_lua("ping()", await_print=True)
@@ -105,12 +90,9 @@ async def record_audio_from_frame(frame, rx_audio, duration=5):
     except Exception as e:
         print(f"⚠️ Verification error: {e}")
 
-    # Kick off start_record on the Frame (non-blocking send — Lua streams back chunks)
     print("▶️ Starting recording on Frame...")
     await frame.send_lua(f"start_record({duration})")
 
-    # Collect chunks until the Lua function finishes streaming.
-    # Give a generous timeout: duration + 10s for Bluetooth overhead.
     timeout = duration + 10
     pcm_chunks = []
     deadline = asyncio.get_event_loop().time() + timeout
@@ -132,11 +114,9 @@ async def record_audio_from_frame(frame, rx_audio, duration=5):
         print("⚠️  Empty audio buffer — no chunks received from Frame mic")
         return None
 
-    # Concatenate all PCM chunks and wrap in a WAV container
     pcm_data = b"".join(pcm_chunks)
     wav_bytes = RxAudio.to_wav_bytes(pcm_data)
     
-    # Save recording to file for debugging
     filename = f"capture_{int(time.time())}.wav"
     filepath = os.path.join(RECORDINGS_DIR, filename)
     try:
