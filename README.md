@@ -52,7 +52,6 @@ https://docs.brilliant.xyz/frame/frame-sdk-lua/
 
 
 
-Recommended set up is below
 ------------------------------------------------------------------------------------------------------
 ## Setup
 clone this repo onto your device and run in a virtual enviroment.

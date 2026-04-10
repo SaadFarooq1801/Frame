@@ -3,3 +3,8 @@ frame-ble
 numpy
 Pillow
 google-generativeai
+
+# Custom model training & MacBook detection
+torch
+torchvision
+opencv-python
