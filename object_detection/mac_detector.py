@@ -34,7 +34,7 @@ from PIL import Image
 MODEL_PATH  = os.path.join(os.path.dirname(__file__), "shape_model.pth")
 LABELS_PATH = os.path.join(os.path.dirname(__file__), "class_labels.json")
 IMG_SIZE    = 224
-CONF_THRESH = 0.55     # Show label only if confidence > this
+CONF_THRESH = 0.35     # Lower threshold for small-dataset model
 SMOOTH_N    = 8        # Smooth predictions over last N frames (reduces jitter)
 
 # ─── Colours & Style ──────────────────────────────────────────────────────────
