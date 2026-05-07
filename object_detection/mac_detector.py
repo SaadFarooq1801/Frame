@@ -29,7 +29,7 @@ import torch.nn as nn
 from torchvision import models, transforms
 from PIL import Image
 
-# ─── Config ───────────────────────────────────────────────────────────────────
+# Config 
 
 MODEL_PATH  = os.path.join(os.path.dirname(__file__), "shape_model.pth")
 LABELS_PATH = os.path.join(os.path.dirname(__file__), "class_labels.json")
@@ -37,7 +37,7 @@ IMG_SIZE    = 224
 CONF_THRESH = 0.35     # Lower threshold for small-dataset model
 SMOOTH_N    = 8        # Smooth predictions over last N frames (reduces jitter)
 
-# ─── Colours & Style ──────────────────────────────────────────────────────────
+# Colours & Style
 
 PALETTE = {
     "cylinder":          (0, 229, 160),   # mint green
@@ -47,7 +47,7 @@ PALETTE = {
 FONT       = cv2.FONT_HERSHEY_DUPLEX
 BG_ALPHA   = 0.55   # overlay transparency
 
-# ─── Device ───────────────────────────────────────────────────────────────────
+# Device
 
 def get_device():
     if torch.backends.mps.is_available():
@@ -56,7 +56,7 @@ def get_device():
         return torch.device("cuda")
     return torch.device("cpu")
 
-# ─── Camera Scanner ───────────────────────────────────────────────────────────
+# Camera Scanner
 
 def get_macos_camera_names() -> list[str]:
     """Use system_profiler to get ordered camera names on macOS."""
@@ -100,7 +100,7 @@ def pick_builtin_camera(cameras: list[dict]) -> int:
     # Fallback: last available camera (Continuity Camera usually grabs index 0)
     return cameras[-1]["index"] if cameras else 0
 
-# ─── Model Loading ────────────────────────────────────────────────────────────
+# Model Loading 
 
 def load_model(device):
     if not os.path.exists(MODEL_PATH):
@@ -134,7 +134,7 @@ def load_model(device):
     print(f"✅ Model loaded  —  {num_classes} classes: {list(label_map.values())}")
     return model, label_map
 
-# ─── Preprocessing ────────────────────────────────────────────────────────────
+# Preprocessing
 
 preprocess = transforms.Compose([
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
@@ -150,8 +150,7 @@ def frame_to_tensor(bgr_frame, device):
     tensor = preprocess(pil).unsqueeze(0).to(device)
     return tensor
 
-# ─── Inference ────────────────────────────────────────────────────────────────
-
+#Inference 
 def predict(model, tensor, label_map):
     with torch.no_grad():
         logits = model(tensor)
@@ -160,19 +159,16 @@ def predict(model, tensor, label_map):
     label = label_map[str(idx.item())]
     return label, conf.item()
 
-# ─── Drawing ──────────────────────────────────────────────────────────────────
+# Drawing 
 
 def draw_overlay(frame, label, confidence, fps, smoothed_label):
     h, w = frame.shape[:2]
-
-    # ── Top bar (FPS + title) ──
     overlay = frame.copy()
     cv2.rectangle(overlay, (0, 0), (w, 48), (15, 15, 20), -1)
     cv2.addWeighted(overlay, BG_ALPHA, frame, 1 - BG_ALPHA, 0, frame)
     cv2.putText(frame, "Shape Detector", (12, 32), FONT, 0.75, (220, 220, 220), 1)
     cv2.putText(frame, f"FPS: {fps:.0f}", (w - 100, 32), FONT, 0.65, (160, 160, 160), 1)
 
-    # ── Bottom result bar ──
     bar_h = 90
     overlay2 = frame.copy()
     cv2.rectangle(overlay2, (0, h - bar_h), (w, h), (15, 15, 20), -1)
@@ -196,7 +192,7 @@ def draw_overlay(frame, label, confidence, fps, smoothed_label):
         cv2.putText(frame, "Point camera at a shape", (18, h - 18),
                     FONT, 0.52, (90, 90, 90), 1)
 
-    # ── Crosshair guide ──
+    # Crosshair guide
     cx, cy = w // 2, h // 2
     size = 22
     thick_color = (*color, 180)
@@ -206,8 +202,7 @@ def draw_overlay(frame, label, confidence, fps, smoothed_label):
 
     return frame
 
-# ─── Main Loop ────────────────────────────────────────────────────────────────
-
+# Main Loop 
 def run_detector(camera_index: int, model, label_map, device):
     cap = cv2.VideoCapture(camera_index, cv2.CAP_AVFOUNDATION)
     if not cap.isOpened():
@@ -270,7 +265,7 @@ def main():
     print("  🔷 Shape Detector  —  MacBook Camera Mode")
     print("=" * 52)
 
-    # ── Camera scan ──
+    # Camera scan
     cameras = scan_cameras(max_index=6)
 
     if not cameras:
@@ -286,7 +281,7 @@ def main():
         print(f"   python mac_detector.py --camera {cameras[0]['index']}")
         return
 
-    # ── Pick camera ──
+    # Pick camera
     if args.camera is not None:
         cam_index = args.camera
         cam_name  = next((c["name"] for c in cameras if c["index"] == cam_index), f"Camera {cam_index}")
@@ -301,7 +296,7 @@ def main():
         if others:
             print(f"   python mac_detector.py --camera {others[0]['index']}")
 
-    # ── Load model & run ──
+    # Load model & run
     device = get_device()
     print(f"🖥️  Device: {device}")
     model, label_map = load_model(device)
