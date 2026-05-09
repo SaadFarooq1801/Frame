@@ -26,8 +26,11 @@ Install dependencies:
 
 import argparse
 import os
+import platform
 import subprocess
 import time
+
+PLATFORM = platform.system()   # "Darwin" | "Windows" | "Linux"
 
 import clip
 import cv2
@@ -111,29 +114,52 @@ def get_device():
         return torch.device("cuda")
     return torch.device("cpu")
 
-# Camera Scanner (same as mac_detector.py)
+# Camera Scanner
 
-def get_macos_camera_names() -> list[str]:
-    try:
-        raw = subprocess.check_output(
-            ["system_profiler", "SPCameraDataType"],
-            stderr=subprocess.DEVNULL, timeout=5
-        ).decode()
-        names = []
-        for line in raw.splitlines():
-            stripped = line.strip()
-            if line.startswith("      ") and stripped.endswith(":") and "Model" not in stripped:
-                names.append(stripped.rstrip(":"))
-        return names
-    except Exception:
-        return []
+def _cam_backend() -> int:
+    """Return the best OpenCV camera backend for the current OS."""
+    if PLATFORM == "Darwin":
+        return cv2.CAP_AVFOUNDATION
+    if PLATFORM == "Windows":
+        return cv2.CAP_DSHOW
+    return cv2.CAP_ANY
+
+def _list_camera_names() -> list[str]:
+    """Best-effort camera name list, platform-specific."""
+    if PLATFORM == "Darwin":
+        try:
+            raw = subprocess.check_output(
+                ["system_profiler", "SPCameraDataType"],
+                stderr=subprocess.DEVNULL, timeout=5,
+            ).decode()
+            names = []
+            for line in raw.splitlines():
+                stripped = line.strip()
+                if line.startswith("      ") and stripped.endswith(":") and "Model" not in stripped:
+                    names.append(stripped.rstrip(":"))
+            return names
+        except Exception:
+            return []
+    if PLATFORM == "Windows":
+        try:
+            raw = subprocess.check_output(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-PnpDevice -Class Camera -Status OK "
+                 "| Select-Object -ExpandProperty FriendlyName"],
+                stderr=subprocess.DEVNULL, timeout=5,
+            ).decode(errors="ignore")
+            return [ln.strip() for ln in raw.splitlines() if ln.strip()]
+        except Exception:
+            return []
+    return []
 
 def scan_cameras(max_index: int = 5) -> list[dict]:
-    names = get_macos_camera_names()
-    found = []
+    backend = _cam_backend()
+    names   = _list_camera_names()
+    found   = []
     print(f"\n🔍 Scanning cameras (indices 0–{max_index - 1})...")
     for i in range(max_index):
-        cap = cv2.VideoCapture(i, cv2.CAP_AVFOUNDATION)
+        cap = cv2.VideoCapture(i, backend)
         if cap.isOpened():
             ret, _ = cap.read()
             cap.release()
@@ -143,7 +169,11 @@ def scan_cameras(max_index: int = 5) -> list[dict]:
     return found
 
 def pick_builtin_camera(cameras: list[dict]) -> int:
-    keywords = ["facetime", "built-in", "built in", "isight"]
+    """Return the index most likely to be the built-in camera."""
+    if PLATFORM == "Darwin":
+        keywords = ["facetime", "built-in", "built in", "isight"]
+    else:
+        keywords = ["integrated", "internal", "built-in", "hd camera", "webcam"]
     for cam in cameras:
         if any(kw in cam["name"].lower() for kw in keywords):
             return cam["index"]
@@ -151,30 +181,59 @@ def pick_builtin_camera(cameras: list[dict]) -> int:
 
 # Color Detection
 
-def get_dominant_color(frame_bgr, bbox=None):
+def get_dominant_color(frame_bgr, bbox=None, contour=None):
     """
     Detect dominant object color via HSV pixel analysis.
+    When a contour is supplied, samples only pixels inside its convex hull —
+    this prevents background bleed entirely. Falls back to center-50% crop.
     Detects: black, white, gray, red, orange, yellow, green, blue, purple, pink, brown.
-    Samples the inner 50% of the bbox to avoid background contamination.
     """
     fh, fw = frame_bgr.shape[:2]
+
     if bbox is not None:
         x1, y1, x2, y2 = bbox
-        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-        qw = max(4, (x2 - x1) // 4)
-        qh = max(4, (y2 - y1) // 4)
-        roi = frame_bgr[max(0, cy - qh): min(fh, cy + qh),
-                        max(0, cx - qw): min(fw, cx + qw)]
+        roi_bgr = frame_bgr[y1:y2, x1:x2]
+        if roi_bgr.size == 0:
+            return "unknown"
+        roi_hsv = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
+        rh, rw  = roi_bgr.shape[:2]
+
+        valid = None
+        if contour is not None:
+            hull     = cv2.convexHull(contour)
+            hull_roi = (hull - np.array([x1, y1])).astype(np.int32)
+            mask     = np.zeros((rh, rw), dtype=np.uint8)
+            cv2.fillPoly(mask, [hull_roi], 255)
+            mask  = cv2.erode(mask, np.ones((5, 5), np.uint8), iterations=2)
+            valid = mask > 0
+            if int(valid.sum()) < 100:
+                valid = None   # hull too small after erosion — fallback
+
+        if valid is not None:
+            H = roi_hsv[:, :, 0][valid].astype(np.int32)
+            S = roi_hsv[:, :, 1][valid].astype(np.int32)
+            V = roi_hsv[:, :, 2][valid].astype(np.int32)
+        else:
+            # Center 50% of the roi
+            ch, cw = rh // 2, rw // 2
+            qh, qw = max(4, ch // 2), max(4, cw // 2)
+            crop   = roi_hsv[ch - qh: ch + qh, cw - qw: cw + qw]
+            if crop.size == 0:
+                return "unknown"
+            H = crop[:, :, 0].ravel().astype(np.int32)
+            S = crop[:, :, 1].ravel().astype(np.int32)
+            V = crop[:, :, 2].ravel().astype(np.int32)
     else:
-        roi = frame_bgr[fh // 4: 3 * fh // 4, fw // 4: 3 * fw // 4]
+        center = frame_bgr[fh // 4: 3 * fh // 4, fw // 4: 3 * fw // 4]
+        if center.size == 0:
+            return "unknown"
+        hsv_c = cv2.cvtColor(center, cv2.COLOR_BGR2HSV)
+        H = hsv_c[:, :, 0].ravel().astype(np.int32)
+        S = hsv_c[:, :, 1].ravel().astype(np.int32)
+        V = hsv_c[:, :, 2].ravel().astype(np.int32)
 
-    if roi.size == 0:
+    if len(H) == 0:
         return "unknown"
-
-    hsv   = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    H     = hsv[:, :, 0].ravel().astype(np.int32)
-    S     = hsv[:, :, 1].ravel().astype(np.int32)
-    V     = hsv[:, :, 2].ravel().astype(np.int32)
     total = len(H)
 
     # Pixel category masks
@@ -253,17 +312,20 @@ def detect_aruco_markers(frame):
 
 def find_shape_bboxes(frame, min_area_frac=0.04):
     """
-    Find bounding boxes of foreground objects via Canny + contour analysis.
-    Returns boxes sorted largest-first (largest ≈ closest to camera).
-    A second box is only included when its area is ≥ 30 % of the first,
-    preventing background clutter from registering as a second shape.
+    Find 3D shape regions via Canny + contour analysis with quality scoring.
+    Each candidate is scored by area × solidity × centrality so that compact,
+    centrally-placed shapes beat sprawling background clutter.
+    Returns list of (bbox, contour) tuples, best-scoring first.
     """
     fh, fw  = frame.shape[:2]
+    cx_f, cy_f = fw // 2, fh // 2
+    max_dist   = ((fw ** 2 + fh ** 2) ** 0.5) / 2
+
     gray    = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (9, 9), 0)
     edges   = cv2.Canny(blurred, 30, 90)
-    kernel  = np.ones((25, 25), np.uint8)
-    dilated = cv2.dilate(edges, kernel, iterations=2)
+    # Smaller kernel than before — avoids merging the shape with nearby clutter
+    dilated = cv2.dilate(edges, np.ones((15, 15), np.uint8), iterations=1)
 
     contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     min_area = fw * fh * min_area_frac
@@ -272,23 +334,44 @@ def find_shape_bboxes(frame, min_area_frac=0.04):
     candidates = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if min_area <= area <= max_area:
-            x, y, bw, bh = cv2.boundingRect(cnt)
-            candidates.append((area, (x, y, x + bw, y + bh)))
+        if area < min_area or area > max_area:
+            continue
 
-    # Largest first — closest object wins
+        x, y, bw, bh = cv2.boundingRect(cnt)
+
+        # Solidity: 3D geometric shapes have compact, convex silhouettes
+        hull      = cv2.convexHull(cnt)
+        hull_area = cv2.contourArea(hull)
+        solidity  = area / hull_area if hull_area > 0 else 0
+        if solidity < 0.45:          # irregular clutter (furniture, text, cables)
+            continue
+
+        # Aspect ratio: reject very wide or very tall blobs (desk edges, window frames)
+        aspect = bw / max(bh, 1)
+        if aspect < 0.25 or aspect > 4.0:
+            continue
+
+        # Centrality: user points camera at the object, so it's near the centre
+        cnt_cx = x + bw // 2
+        cnt_cy = y + bh // 2
+        dist   = ((cnt_cx - cx_f) ** 2 + (cnt_cy - cy_f) ** 2) ** 0.5
+        centrality = 1.0 - dist / max_dist
+
+        score = area * solidity * (0.5 + 0.5 * centrality)
+        candidates.append((score, area, (x, y, x + bw, y + bh), cnt))
+
     candidates.sort(key=lambda c: c[0], reverse=True)
 
     if not candidates:
         return []
 
-    bboxes = [candidates[0][1]]
+    results = [(candidates[0][2], candidates[0][3])]
 
-    # Only add a second shape if it is large enough relative to the first
-    if len(candidates) > 1 and candidates[1][0] >= candidates[0][0] * 0.30:
-        bboxes.append(candidates[1][1])
+    # Second shape only if it is a substantial fraction of the first
+    if len(candidates) > 1 and candidates[1][1] >= candidates[0][1] * 0.30:
+        results.append((candidates[1][2], candidates[1][3]))
 
-    return bboxes
+    return results
 
 # Blur Preprocessing
 
@@ -508,12 +591,15 @@ def draw_overlay(frame, detections, fps, marker_centers):
 # Main Loop
 
 def run_detector(camera_index, model, preprocess, class_text_features, device):
-    cap = cv2.VideoCapture(camera_index, cv2.CAP_AVFOUNDATION)
+    cap = cv2.VideoCapture(camera_index, _cam_backend())
     if not cap.isOpened():
-        raise RuntimeError(
-            f"❌ Cannot open camera index {camera_index}. "
-            "Check System Settings → Privacy & Security → Camera."
+        hint = (
+            "System Settings → Privacy & Security → Camera"
+            if PLATFORM == "Darwin"
+            else "Settings → Privacy & Security → Camera" if PLATFORM == "Windows"
+            else "check /dev/video* permissions"
         )
+        raise RuntimeError(f"❌ Cannot open camera index {camera_index}. Check: {hint}")
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
@@ -537,16 +623,16 @@ def run_detector(camera_index, model, preprocess, class_text_features, device):
 
         # Run inference every 3rd frame (CLIP is slower than a custom model)
         if frame_count % 3 == 0:
-            bboxes = find_shape_bboxes(frame)
-            if bboxes:
+            regions = find_shape_bboxes(frame)
+            if regions:
                 new_dets = []
-                for bbox in bboxes:
+                for bbox, cnt in regions:
                     x1, y1, x2, y2 = bbox
                     roi = frame[y1:y2, x1:x2]
                     if roi.size == 0:
                         continue
                     lbl, conf, scores = predict(model, preprocess, class_text_features, roi, device)
-                    color_name = get_dominant_color(frame, bbox)
+                    color_name = get_dominant_color(frame, bbox, cnt)
                     new_dets.append({
                         "bbox":       bbox,
                         "label":      lbl,
@@ -585,7 +671,7 @@ def run_detector(camera_index, model, preprocess, class_text_features, device):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="CLIP Shape Detector — MacBook Camera")
+    parser = argparse.ArgumentParser(description="CLIP Shape Detector — Camera")
     parser.add_argument("--camera", type=int, default=None)
     parser.add_argument("--list-cameras", action="store_true")
     args = parser.parse_args()
