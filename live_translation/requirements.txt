@@ -1,8 +1,4 @@
-frame-sdk
-googletrans==4.0.0rc1
 SpeechRecognition
-numpy
 PyAudio
-frame-msg
-openai-whisper
-soundfile
+elevenlabs>=2.0
+groq>=1.0

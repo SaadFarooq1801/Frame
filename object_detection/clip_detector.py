@@ -22,7 +22,6 @@ Usage:
 
 Install dependencies:
     pip install torch torchvision opencv-python pillow
-    pip install git+https://github.com/openai/CLIP.git
 """
 
 import argparse
