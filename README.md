@@ -29,7 +29,7 @@ You can change the model in `translator_mac.py` to trade off speed vs accuracy:
 |-------|------|----------|
 | `tiny` | 75MB | Testing only |
 | `base` | 150MB | Fast, low accuracy |
-| `small` | 460MB | ✅ Recommended |
+| `small` | 460MB | Recommended |
 | `medium` | 1.5GB | High accuracy, slower |
 | `large` | 3GB | Best accuracy |
 
